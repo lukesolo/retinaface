@@ -6,9 +6,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "gdown>=3.10.1",
-    "numpy>=1.14.0",
+    "httpx>=0.28.1",
+    "numpy<2",
     "opencv-python>=3.4.4",
     "pillow>=5.2.0",
+    "python-multipart>=0.0.9",
     "ray[serve]>=2.48.0",
     "tensorflow<2.16.0",
 ]

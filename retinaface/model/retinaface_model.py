@@ -40,7 +40,6 @@ else:
         UpSampling2D,
         concatenate,
         Softmax,
-        Lambda,
     )
 
 
@@ -88,7 +87,6 @@ def load_weights(model: Model):
             "manually.",
         )
 
-    logger.info(f"Loading weights from {exact_file}")
     model.load_weights(exact_file)
 
     return model
@@ -100,9 +98,6 @@ def build_model() -> Model:
     """
     data = Input(dtype=tf.float32, shape=(None, None, 3), name="data")
 
-    # ... (All the initial layers from bn_data to ssh_m3_det_context_conv1_bn are correct and remain unchanged)
-    # ... I am omitting them here for brevity but they should be in your file.
-    
     bn_data = BatchNormalization(epsilon=1.9999999494757503e-05, name="bn_data", trainable=False)(
         data
     )
@@ -1029,25 +1024,11 @@ def build_model() -> Model:
         epsilon=1.9999999494757503e-05, name="ssh_m3_det_context_conv1_bn", trainable=False
     )(ssh_m3_det_context_conv1)
 
-    # --- Start of changes ---
-
-    def crop_tensors_factory(name):
-        def _crop_tensors(inputs):
-            x1, x2 = inputs
-            x1_shape = tf.shape(x1)
-            x2_shape = tf.shape(x2)
-            offsets = [0, (x1_shape[1] - x2_shape[1]) // 2, (x1_shape[2] - x2_shape[2]) // 2, 0]
-            size = [-1, x2_shape[1], x2_shape[2], -1]
-            return tf.slice(x1, offsets, size, name=name)
-        return _crop_tensors
-        
-    def crop_output_shape(input_shapes):
-        # The output shape is the shape of the second tensor (the one we are cropping to).
-        return input_shapes[1]
-
-    crop0 = Lambda(crop_tensors_factory('crop0'), output_shape=crop_output_shape, name='crop0')([ssh_c3_up, ssh_c2_lateral_relu])
-    
-    # --- End of changes ---
+    x1_shape = tf.shape(ssh_c3_up)
+    x2_shape = tf.shape(ssh_c2_lateral_relu)
+    offsets = [0, (x1_shape[1] - x2_shape[1]) // 2, (x1_shape[2] - x2_shape[2]) // 2, 0]
+    size = [-1, x2_shape[1], x2_shape[2], -1]
+    crop0 = tf.slice(ssh_c3_up, offsets, size, "crop0")
 
     ssh_m3_det_context_conv1_relu = ReLU(name="ssh_m3_det_context_conv1_relu")(
         ssh_m3_det_context_conv1_bn
@@ -1161,11 +1142,11 @@ def build_model() -> Model:
         epsilon=1.9999999494757503e-05, name="ssh_m2_det_context_conv1_bn", trainable=False
     )(ssh_m2_det_context_conv1)
 
-    # --- Start of changes ---
-
-    crop1 = Lambda(crop_tensors_factory('crop1'), output_shape=crop_output_shape, name='crop1')([ssh_m2_red_up, ssh_m1_red_conv_relu])
-
-    # --- End of changes ---
+    x1_shape = tf.shape(ssh_m2_red_up)
+    x2_shape = tf.shape(ssh_m1_red_conv_relu)
+    offsets = [0, (x1_shape[1] - x2_shape[1]) // 2, (x1_shape[2] - x2_shape[2]) // 2, 0]
+    size = [-1, x2_shape[1], x2_shape[2], -1]
+    crop1 = tf.slice(ssh_m2_red_up, offsets, size, "crop1")
 
     ssh_m3_det_concat = concatenate(
         [ssh_m3_det_conv1_bn, ssh_m3_det_context_conv2_bn, ssh_m3_det_context_conv3_2_bn],
@@ -1227,27 +1208,16 @@ def build_model() -> Model:
         use_bias=True,
     )(ssh_m3_det_concat_relu)
 
-    # --- Start of changes ---
-
-    def reshape_cls_score_factory(name):
-        def _reshape_cls_score(x):
-            inter_1 = concatenate([x[:, :, :, 0], x[:, :, :, 1]], axis=1)
-            inter_2 = concatenate([x[:, :, :, 2], x[:, :, :, 3]], axis=1)
-            final = tf.stack([inter_1, inter_2])
-            return tf.transpose(final, (1, 2, 3, 0), name=name)
-        return _reshape_cls_score
-
-    def reshape_cls_score_output_shape(input_shape):
-        batch, height, width, _ = input_shape
-        if height is not None:
-            height *= 2
-        return (batch, height, width, 2)
-
-    face_rpn_cls_score_reshape_stride32 = Lambda(
-        reshape_cls_score_factory('face_rpn_cls_score_reshape_stride32'), output_shape=reshape_cls_score_output_shape, name='face_rpn_cls_score_reshape_stride32'
-    )(face_rpn_cls_score_stride32)
-
-    # --- End of changes ---
+    inter_1 = concatenate(
+        [face_rpn_cls_score_stride32[:, :, :, 0], face_rpn_cls_score_stride32[:, :, :, 1]], axis=1
+    )
+    inter_2 = concatenate(
+        [face_rpn_cls_score_stride32[:, :, :, 2], face_rpn_cls_score_stride32[:, :, :, 3]], axis=1
+    )
+    final = tf.stack([inter_1, inter_2])
+    face_rpn_cls_score_reshape_stride32 = tf.transpose(
+        final, (1, 2, 3, 0), name="face_rpn_cls_score_reshape_stride32"
+    )
 
     face_rpn_bbox_pred_stride32 = Conv2D(
         filters=8,
@@ -1288,32 +1258,17 @@ def build_model() -> Model:
     face_rpn_cls_prob_stride32 = Softmax(name="face_rpn_cls_prob_stride32")(
         face_rpn_cls_score_reshape_stride32
     )
-    
-    # --- Start of changes ---
 
-    def reshape_cls_prob_factory(name):
-        def _reshape_cls_prob(x):
-            input_shape = [tf.shape(x)[k] for k in range(4)]
-            sz = tf.dtypes.cast(input_shape[1] / 2, dtype=tf.int32)
-            inter_1 = x[:, 0:sz, :, 0]
-            inter_2 = x[:, 0:sz, :, 1]
-            inter_3 = x[:, sz:, :, 0]
-            inter_4 = x[:, sz:, :, 1]
-            final = tf.stack([inter_1, inter_3, inter_2, inter_4])
-            return tf.transpose(final, (1, 2, 3, 0), name=name)
-        return _reshape_cls_prob
-
-    def reshape_cls_prob_output_shape(input_shape):
-        batch, height, width, _ = input_shape
-        if height is not None:
-            height //= 2
-        return (batch, height, width, 4)
-
-    face_rpn_cls_prob_reshape_stride32 = Lambda(
-        reshape_cls_prob_factory('face_rpn_cls_prob_reshape_stride32'), output_shape=reshape_cls_prob_output_shape, name='face_rpn_cls_prob_reshape_stride32'
-    )(face_rpn_cls_prob_stride32)
-    
-    # --- End of changes ---
+    input_shape = [tf.shape(face_rpn_cls_prob_stride32)[k] for k in range(4)]
+    sz = tf.dtypes.cast(input_shape[1] / 2, dtype=tf.int32)
+    inter_1 = face_rpn_cls_prob_stride32[:, 0:sz, :, 0]
+    inter_2 = face_rpn_cls_prob_stride32[:, 0:sz, :, 1]
+    inter_3 = face_rpn_cls_prob_stride32[:, sz:, :, 0]
+    inter_4 = face_rpn_cls_prob_stride32[:, sz:, :, 1]
+    final = tf.stack([inter_1, inter_3, inter_2, inter_4])
+    face_rpn_cls_prob_reshape_stride32 = tf.transpose(
+        final, (1, 2, 3, 0), name="face_rpn_cls_prob_reshape_stride32"
+    )
 
     ssh_m2_det_context_conv3_2_pad = ZeroPadding2D(padding=tuple([1, 1]))(
         ssh_m2_det_context_conv3_1_relu
@@ -1409,13 +1364,16 @@ def build_model() -> Model:
         use_bias=True,
     )(ssh_m2_det_concat_relu)
 
-    # --- Start of changes ---
-
-    face_rpn_cls_score_reshape_stride16 = Lambda(
-        reshape_cls_score_factory('face_rpn_cls_score_reshape_stride16'), output_shape=reshape_cls_score_output_shape, name='face_rpn_cls_score_reshape_stride16'
-    )(face_rpn_cls_score_stride16)
-
-    # --- End of changes ---
+    inter_1 = concatenate(
+        [face_rpn_cls_score_stride16[:, :, :, 0], face_rpn_cls_score_stride16[:, :, :, 1]], axis=1
+    )
+    inter_2 = concatenate(
+        [face_rpn_cls_score_stride16[:, :, :, 2], face_rpn_cls_score_stride16[:, :, :, 3]], axis=1
+    )
+    final = tf.stack([inter_1, inter_2])
+    face_rpn_cls_score_reshape_stride16 = tf.transpose(
+        final, (1, 2, 3, 0), name="face_rpn_cls_score_reshape_stride16"
+    )
 
     face_rpn_bbox_pred_stride16 = Conv2D(
         filters=8,
@@ -1451,13 +1409,16 @@ def build_model() -> Model:
         face_rpn_cls_score_reshape_stride16
     )
 
-    # --- Start of changes ---
-
-    face_rpn_cls_prob_reshape_stride16 = Lambda(
-        reshape_cls_prob_factory('face_rpn_cls_prob_reshape_stride16'), output_shape=reshape_cls_prob_output_shape, name='face_rpn_cls_prob_reshape_stride16'
-    )(face_rpn_cls_prob_stride16)
-    
-    # --- End of changes ---
+    input_shape = [tf.shape(face_rpn_cls_prob_stride16)[k] for k in range(4)]
+    sz = tf.dtypes.cast(input_shape[1] / 2, dtype=tf.int32)
+    inter_1 = face_rpn_cls_prob_stride16[:, 0:sz, :, 0]
+    inter_2 = face_rpn_cls_prob_stride16[:, 0:sz, :, 1]
+    inter_3 = face_rpn_cls_prob_stride16[:, sz:, :, 0]
+    inter_4 = face_rpn_cls_prob_stride16[:, sz:, :, 1]
+    final = tf.stack([inter_1, inter_3, inter_2, inter_4])
+    face_rpn_cls_prob_reshape_stride16 = tf.transpose(
+        final, (1, 2, 3, 0), name="face_rpn_cls_prob_reshape_stride16"
+    )
 
     ssh_m1_det_context_conv3_2_pad = ZeroPadding2D(padding=tuple([1, 1]))(
         ssh_m1_det_context_conv3_1_relu
@@ -1491,14 +1452,17 @@ def build_model() -> Model:
         padding="VALID",
         use_bias=True,
     )(ssh_m1_det_concat_relu)
-    
-    # --- Start of changes ---
 
-    face_rpn_cls_score_reshape_stride8 = Lambda(
-        reshape_cls_score_factory('face_rpn_cls_score_reshape_stride8'), output_shape=reshape_cls_score_output_shape, name='face_rpn_cls_score_reshape_stride8'
-    )(face_rpn_cls_score_stride8)
-
-    # --- End of changes ---
+    inter_1 = concatenate(
+        [face_rpn_cls_score_stride8[:, :, :, 0], face_rpn_cls_score_stride8[:, :, :, 1]], axis=1
+    )
+    inter_2 = concatenate(
+        [face_rpn_cls_score_stride8[:, :, :, 2], face_rpn_cls_score_stride8[:, :, :, 3]], axis=1
+    )
+    final = tf.stack([inter_1, inter_2])
+    face_rpn_cls_score_reshape_stride8 = tf.transpose(
+        final, (1, 2, 3, 0), name="face_rpn_cls_score_reshape_stride8"
+    )
 
     face_rpn_bbox_pred_stride8 = Conv2D(
         filters=8,
@@ -1522,13 +1486,16 @@ def build_model() -> Model:
         face_rpn_cls_score_reshape_stride8
     )
 
-    # --- Start of changes ---
-
-    face_rpn_cls_prob_reshape_stride8 = Lambda(
-        reshape_cls_prob_factory('face_rpn_cls_prob_reshape_stride8'), output_shape=reshape_cls_prob_output_shape, name='face_rpn_cls_prob_reshape_stride8'
-    )(face_rpn_cls_prob_stride8)
-    
-    # --- End of changes ---
+    input_shape = [tf.shape(face_rpn_cls_prob_stride8)[k] for k in range(4)]
+    sz = tf.dtypes.cast(input_shape[1] / 2, dtype=tf.int32)
+    inter_1 = face_rpn_cls_prob_stride8[:, 0:sz, :, 0]
+    inter_2 = face_rpn_cls_prob_stride8[:, 0:sz, :, 1]
+    inter_3 = face_rpn_cls_prob_stride8[:, sz:, :, 0]
+    inter_4 = face_rpn_cls_prob_stride8[:, sz:, :, 1]
+    final = tf.stack([inter_1, inter_3, inter_2, inter_4])
+    face_rpn_cls_prob_reshape_stride8 = tf.transpose(
+        final, (1, 2, 3, 0), name="face_rpn_cls_prob_reshape_stride8"
+    )
 
     model = Model(
         inputs=data,
