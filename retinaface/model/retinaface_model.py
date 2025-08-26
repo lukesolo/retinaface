@@ -1031,19 +1031,21 @@ def build_model() -> Model:
 
     # --- Start of changes ---
 
-    def crop_tensors(inputs, name):
-        x1, x2 = inputs
-        x1_shape = tf.shape(x1)
-        x2_shape = tf.shape(x2)
-        offsets = [0, (x1_shape[1] - x2_shape[1]) // 2, (x1_shape[2] - x2_shape[2]) // 2, 0]
-        size = [-1, x2_shape[1], x2_shape[2], -1]
-        return tf.slice(x1, offsets, size, name=name)
+    def crop_tensors_factory(name):
+        def _crop_tensors(inputs):
+            x1, x2 = inputs
+            x1_shape = tf.shape(x1)
+            x2_shape = tf.shape(x2)
+            offsets = [0, (x1_shape[1] - x2_shape[1]) // 2, (x1_shape[2] - x2_shape[2]) // 2, 0]
+            size = [-1, x2_shape[1], x2_shape[2], -1]
+            return tf.slice(x1, offsets, size, name=name)
+        return _crop_tensors
         
     def crop_output_shape(input_shapes):
         # The output shape is the shape of the second tensor (the one we are cropping to).
         return input_shapes[1]
 
-    crop0 = Lambda(crop_tensors, output_shape=crop_output_shape, name='crop0')([ssh_c3_up, ssh_c2_lateral_relu])
+    crop0 = Lambda(crop_tensors_factory('crop0'), output_shape=crop_output_shape, name='crop0')([ssh_c3_up, ssh_c2_lateral_relu])
     
     # --- End of changes ---
 
@@ -1161,7 +1163,7 @@ def build_model() -> Model:
 
     # --- Start of changes ---
 
-    crop1 = Lambda(crop_tensors, output_shape=crop_output_shape, name='crop1')([ssh_m2_red_up, ssh_m1_red_conv_relu])
+    crop1 = Lambda(crop_tensors_factory('crop1'), output_shape=crop_output_shape, name='crop1')([ssh_m2_red_up, ssh_m1_red_conv_relu])
 
     # --- End of changes ---
 
@@ -1227,11 +1229,13 @@ def build_model() -> Model:
 
     # --- Start of changes ---
 
-    def reshape_cls_score(x, name):
-        inter_1 = concatenate([x[:, :, :, 0], x[:, :, :, 1]], axis=1)
-        inter_2 = concatenate([x[:, :, :, 2], x[:, :, :, 3]], axis=1)
-        final = tf.stack([inter_1, inter_2])
-        return tf.transpose(final, (1, 2, 3, 0), name=name)
+    def reshape_cls_score_factory(name):
+        def _reshape_cls_score(x):
+            inter_1 = concatenate([x[:, :, :, 0], x[:, :, :, 1]], axis=1)
+            inter_2 = concatenate([x[:, :, :, 2], x[:, :, :, 3]], axis=1)
+            final = tf.stack([inter_1, inter_2])
+            return tf.transpose(final, (1, 2, 3, 0), name=name)
+        return _reshape_cls_score
 
     def reshape_cls_score_output_shape(input_shape):
         batch, height, width, _ = input_shape
@@ -1240,7 +1244,7 @@ def build_model() -> Model:
         return (batch, height, width, 2)
 
     face_rpn_cls_score_reshape_stride32 = Lambda(
-        reshape_cls_score, output_shape=reshape_cls_score_output_shape, name='face_rpn_cls_score_reshape_stride32'
+        reshape_cls_score_factory('face_rpn_cls_score_reshape_stride32'), output_shape=reshape_cls_score_output_shape, name='face_rpn_cls_score_reshape_stride32'
     )(face_rpn_cls_score_stride32)
 
     # --- End of changes ---
@@ -1287,15 +1291,17 @@ def build_model() -> Model:
     
     # --- Start of changes ---
 
-    def reshape_cls_prob(x, name):
-        input_shape = [tf.shape(x)[k] for k in range(4)]
-        sz = tf.dtypes.cast(input_shape[1] / 2, dtype=tf.int32)
-        inter_1 = x[:, 0:sz, :, 0]
-        inter_2 = x[:, 0:sz, :, 1]
-        inter_3 = x[:, sz:, :, 0]
-        inter_4 = x[:, sz:, :, 1]
-        final = tf.stack([inter_1, inter_3, inter_2, inter_4])
-        return tf.transpose(final, (1, 2, 3, 0), name=name)
+    def reshape_cls_prob_factory(name):
+        def _reshape_cls_prob(x):
+            input_shape = [tf.shape(x)[k] for k in range(4)]
+            sz = tf.dtypes.cast(input_shape[1] / 2, dtype=tf.int32)
+            inter_1 = x[:, 0:sz, :, 0]
+            inter_2 = x[:, 0:sz, :, 1]
+            inter_3 = x[:, sz:, :, 0]
+            inter_4 = x[:, sz:, :, 1]
+            final = tf.stack([inter_1, inter_3, inter_2, inter_4])
+            return tf.transpose(final, (1, 2, 3, 0), name=name)
+        return _reshape_cls_prob
 
     def reshape_cls_prob_output_shape(input_shape):
         batch, height, width, _ = input_shape
@@ -1304,7 +1310,7 @@ def build_model() -> Model:
         return (batch, height, width, 4)
 
     face_rpn_cls_prob_reshape_stride32 = Lambda(
-        reshape_cls_prob, output_shape=reshape_cls_prob_output_shape, name='face_rpn_cls_prob_reshape_stride32'
+        reshape_cls_prob_factory('face_rpn_cls_prob_reshape_stride32'), output_shape=reshape_cls_prob_output_shape, name='face_rpn_cls_prob_reshape_stride32'
     )(face_rpn_cls_prob_stride32)
     
     # --- End of changes ---
@@ -1406,7 +1412,7 @@ def build_model() -> Model:
     # --- Start of changes ---
 
     face_rpn_cls_score_reshape_stride16 = Lambda(
-        reshape_cls_score, output_shape=reshape_cls_score_output_shape, name='face_rpn_cls_score_reshape_stride16'
+        reshape_cls_score_factory('face_rpn_cls_score_reshape_stride16'), output_shape=reshape_cls_score_output_shape, name='face_rpn_cls_score_reshape_stride16'
     )(face_rpn_cls_score_stride16)
 
     # --- End of changes ---
@@ -1448,7 +1454,7 @@ def build_model() -> Model:
     # --- Start of changes ---
 
     face_rpn_cls_prob_reshape_stride16 = Lambda(
-        reshape_cls_prob, output_shape=reshape_cls_prob_output_shape, name='face_rpn_cls_prob_reshape_stride16'
+        reshape_cls_prob_factory('face_rpn_cls_prob_reshape_stride16'), output_shape=reshape_cls_prob_output_shape, name='face_rpn_cls_prob_reshape_stride16'
     )(face_rpn_cls_prob_stride16)
     
     # --- End of changes ---
@@ -1489,7 +1495,7 @@ def build_model() -> Model:
     # --- Start of changes ---
 
     face_rpn_cls_score_reshape_stride8 = Lambda(
-        reshape_cls_score, output_shape=reshape_cls_score_output_shape, name='face_rpn_cls_score_reshape_stride8'
+        reshape_cls_score_factory('face_rpn_cls_score_reshape_stride8'), output_shape=reshape_cls_score_output_shape, name='face_rpn_cls_score_reshape_stride8'
     )(face_rpn_cls_score_stride8)
 
     # --- End of changes ---
@@ -1519,7 +1525,7 @@ def build_model() -> Model:
     # --- Start of changes ---
 
     face_rpn_cls_prob_reshape_stride8 = Lambda(
-        reshape_cls_prob, output_shape=reshape_cls_prob_output_shape, name='face_rpn_cls_prob_reshape_stride8'
+        reshape_cls_prob_factory('face_rpn_cls_prob_reshape_stride8'), output_shape=reshape_cls_prob_output_shape, name='face_rpn_cls_prob_reshape_stride8'
     )(face_rpn_cls_prob_stride8)
     
     # --- End of changes ---
